@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { Monster, MathProblem } from '../types/game';
+import { Item } from '../types/items';
+import { generateMonsterDrops } from '../utils/itemGenerator';
+import { Store } from './Store';
 
 // Local image paths for monsters
 const MONSTER_AVATARS = {
@@ -64,22 +67,17 @@ const generateMonster = (level: number): Monster => {
   ];
   
   // Progressive monster selection based on level
-  // Level 1-2: 2 monsters
-  // Level 3-5: 3 monsters
-  // Level 6-8: 4 monsters
-  // Level 9+: 5 monsters
   const availableMonsters = Math.min(
-    2 + Math.floor((level - 1) / 3), // Start with 2 monsters, add 1 every 3 levels
+    2 + Math.floor((level - 1) / 3),
     monsters.length
   );
   
-  // Randomly select from available monsters
   const monsterIndex = Math.floor(Math.random() * availableMonsters);
   const name = monsters[monsterIndex];
   
-  // Scale HP and rewards based on monster level
-  const monsterLevel = Math.max(1, level + Math.floor(Math.random() * 3) - 1); // Random level variation
-  const baseHp = 50 + (monsterLevel * 15); // Increased HP scaling
+  // Restore normal HP calculation
+  const monsterLevel = Math.max(1, level + Math.floor(Math.random() * 3) - 1);
+  const baseHp = 50 + (monsterLevel * 10);
   
   return {
     id: Math.random().toString(36).substr(2, 9),
@@ -90,7 +88,7 @@ const generateMonster = (level: number): Monster => {
     image: MONSTER_AVATARS[name as keyof typeof MONSTER_AVATARS],
     mathProblem: generateMathProblem(monsterLevel),
     rewards: {
-      experience: 25 * monsterLevel, // Increased experience reward
+      experience: 25 * monsterLevel,
       coins: {
         gold: Math.floor(monsterLevel / 2),
         silver: Math.floor(monsterLevel * 2),
@@ -102,7 +100,22 @@ const generateMonster = (level: number): Monster => {
 };
 
 export const Game: React.FC = () => {
-  const { player, currentMonster, gainExperience, gainCoins, setCurrentMonster, takeDamage, resetPlayer } = useGameStore();
+  const {
+    player,
+    currentMonster,
+    inventory,
+    setPlayerName,
+    setCurrentMonster,
+    addToInventory,
+    removeFromInventory,
+    useItem,
+    takeDamage,
+    resetPlayer,
+    collectMonsterDrops,
+    gainExperience,
+    gainCoins,
+    spendCoins,
+  } = useGameStore();
   const [answer, setAnswer] = useState('');
   const [message, setMessage] = useState('');
   const [isDefending, setIsDefending] = useState(false);
@@ -110,10 +123,15 @@ export const Game: React.FC = () => {
   const [isHeroAttacking, setIsHeroAttacking] = useState(false);
   const [isMonsterAttacking, setIsMonsterAttacking] = useState(false);
   const [showShield, setShowShield] = useState(false);
+  const [heroName, setHeroName] = useState('');
+  const [isNameSubmitted, setIsNameSubmitted] = useState(false);
+  const [itemEffectMessage, setItemEffectMessage] = useState<string | null>(null);
+  const [monstersDefeated, setMonstersDefeated] = useState(0);
+  const [showStore, setShowStore] = useState(false);
 
   // Calculate damage based on player level and monster level
   const calculateDamage = () => {
-    const baseDamage = 10 + (player.level * 2);
+    const baseDamage = 10 + (player.level * 2) + player.strength + player.damage;
     const monsterLevel = currentMonster?.level || player.level;
     const levelDifference = monsterLevel - player.level;
     
@@ -131,8 +149,28 @@ export const Game: React.FC = () => {
     gainExperience(experience);
     gainCoins(coins.gold, coins.silver, coins.copper);
     
+    // Collect items and show feedback
+    const drops = generateMonsterDrops(currentMonster.level);
+    if (drops.length > 0) {
+      drops.forEach((item: Item) => {
+        addToInventory(item);
+        setMessage(prev => prev + `\nYou found a ${item.name}!`);
+      });
+    }
+    
+    // Increment monsters defeated counter
+    const newMonstersDefeated = monstersDefeated + 1;
+    setMonstersDefeated(newMonstersDefeated);
+    
+    // Show store every 5 monsters
+    if (newMonstersDefeated % 5 === 0) {
+      setShowStore(true);
+      setCurrentMonster(null);
+      return;
+    }
+    
     // Random chance to spawn a new monster of higher level
-    const shouldLevelUp = Math.random() < 0.3; // 30% chance to face a higher level monster
+    const shouldLevelUp = Math.random() < 0.3;
     const newMonsterLevel = shouldLevelUp ? currentMonster.level + 1 : currentMonster.level;
     const newMonster = generateMonster(newMonsterLevel);
     
@@ -172,9 +210,14 @@ export const Game: React.FC = () => {
     if (currentMonster && currentMonster.hp > 0) {
       setIsDefending(true);
       setDefenseProblem(generateMathProblem(currentMonster.level));
+      setIsMonsterAttacking(true);
+      setTimeout(() => setIsMonsterAttacking(false), 1000);
       
-      // Calculate monster damage based on level difference
-      const monsterDamage = Math.floor(15 + (currentMonster.level * 2));
+      // Calculate monster damage based on level difference and player defense
+      const baseMonsterDamage = Math.floor(15 + (currentMonster.level * 2));
+      const damageReduction = Math.floor(player.defense * 0.5); // Each point of defense reduces damage by 0.5
+      const monsterDamage = Math.max(1, baseMonsterDamage - damageReduction); // Minimum 1 damage
+      
       setMessage(`The monster is attacking! Solve the problem to defend yourself! (${monsterDamage} damage)`);
       setAnswer('');
     }
@@ -183,67 +226,55 @@ export const Game: React.FC = () => {
   const handleSubmitAnswer = () => {
     if (!currentMonster) return;
 
-    const userAnswer = parseInt(answer);
-    if (isNaN(userAnswer)) {
-      setMessage('Please enter a valid number!');
-      return;
-    }
+    // Get the correct math problem based on whether we're defending or attacking
+    const currentProblem = isDefending ? defenseProblem : currentMonster.mathProblem;
+    if (!currentProblem) return;
 
-    if (isDefending) {
-      // Handle defense
-      if (defenseProblem && userAnswer === defenseProblem.answer) {
+    const isCorrect = parseInt(answer) === currentProblem.answer;
+    
+    if (isCorrect) {
+      if (isDefending) {
+        setMessage(`You successfully defended against ${currentMonster.name}'s attack!`);
         setShowShield(true);
-        setTimeout(() => {
-          setShowShield(false);
-          setMessage("You successfully defended against the monster's attack!");
-          setIsDefending(false);
-          setDefenseProblem(null);
-        }, 1000);
+        setTimeout(() => setShowShield(false), 1000);
+        setDefenseProblem(null);
+        setIsDefending(false);
+        setIsMonsterAttacking(false);
       } else {
-        const monsterDamage = Math.floor(15 + (currentMonster.level * 2));
-        setIsMonsterAttacking(true);
-        setTimeout(() => {
-          setIsMonsterAttacking(false);
-          takeDamage(monsterDamage);
-          setMessage(`Wrong answer! The monster hits you for ${monsterDamage} damage! (${defenseProblem?.answer} was correct)`);
-          setIsDefending(false);
-          setDefenseProblem(null);
-        }, 500);
+        setIsHeroAttacking(true);
+        setTimeout(() => setIsHeroAttacking(false), 1000);
+        const damage = calculateDamage();
+        const updatedMonster = { ...currentMonster, hp: currentMonster.hp - damage };
+        setCurrentMonster(updatedMonster);
+        setMessage(`You dealt ${damage} damage to ${currentMonster.name}!`);
+        
+        if (updatedMonster.hp <= 0) {
+          handleMonsterDefeat();
+        } else {
+          // Start monster's turn after successful attack
+          startMonsterTurn();
+        }
       }
     } else {
-      // Handle attack
-      if (userAnswer === currentMonster.mathProblem.answer) {
-        const damage = calculateDamage();
-        setIsHeroAttacking(true);
-        setTimeout(() => {
-          setIsHeroAttacking(false);
-          const updatedMonster = {
-            ...currentMonster,
-            hp: Math.max(0, currentMonster.hp - damage)
-          };
-          setCurrentMonster(updatedMonster);
-          
-          if (updatedMonster.hp <= 0) {
-            handleMonsterDefeat();
-          } else {
-            setMessage(`Correct! You dealt ${damage} damage to the ${currentMonster.name}!`);
-            startMonsterTurn();
-          }
-        }, 500);
+      if (isDefending) {
+        // Calculate monster damage based on level difference and player defense
+        const baseMonsterDamage = Math.floor(15 + (currentMonster.level * 2));
+        const damageReduction = Math.floor(player.defense * 0.5); // Each point of defense reduces damage by 0.5
+        const monsterDamage = Math.max(1, baseMonsterDamage - damageReduction); // Minimum 1 damage
+    
+        takeDamage(monsterDamage);
+        setMessage(`You failed to defend! ${currentMonster.name} dealt ${monsterDamage} damage!`);
+        setDefenseProblem(null);
+        setIsDefending(false);
+        setIsMonsterAttacking(false);
       } else {
-        const monsterDamage = Math.floor(15 + (currentMonster.level * 2));
-        setIsMonsterAttacking(true);
-        setTimeout(() => {
-          setIsMonsterAttacking(false);
-          takeDamage(monsterDamage);
-          setMessage(`Wrong answer! You stumble and take ${monsterDamage} damage! (${currentMonster.mathProblem.answer} was correct)`);
-          
-          if (player.currentHp > monsterDamage) {
-            startMonsterTurn();
-          }
-        }, 500);
+        takeDamage(10);
+        setMessage(`Wrong answer! You take 10 damage!`);
+        // Start monster's turn after failed attack
+        startMonsterTurn();
       }
     }
+    
     setAnswer('');
   };
 
@@ -253,59 +284,214 @@ export const Game: React.FC = () => {
     }
   };
 
+  const handleNameSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (heroName.trim()) {
+      setPlayerName(heroName.trim());
+      setIsNameSubmitted(true);
+    }
+  };
+
+  const handleUseItem = (itemId: string) => {
+    const item = inventory.find(i => i.id === itemId);
+    if (!item) return;
+
+    useItem(itemId);
+    
+    // Show effect message based on item type
+    let effectMessage = '';
+    switch (item.effect.type) {
+      case 'heal':
+        effectMessage = `Restored ${item.effect.power} HP!`;
+        break;
+      case 'strength':
+        effectMessage = `Gained ${item.effect.power} strength!`;
+        break;
+      case 'defense':
+        effectMessage = `Gained ${item.effect.power} defense!`;
+        break;
+      case 'damage':
+        effectMessage = `Increased damage by ${item.effect.power}!`;
+        break;
+      case 'teleport':
+        effectMessage = 'Teleported to safety!';
+        break;
+      case 'identify':
+        effectMessage = 'Item identified!';
+        break;
+      case 'bless':
+        effectMessage = 'Blessed with good fortune!';
+        break;
+    }
+    
+    setItemEffectMessage(effectMessage);
+    setTimeout(() => setItemEffectMessage(null), 2000); // Clear message after 2 seconds
+  };
+
+  const handlePurchase = (item: Item) => {
+    if (spendCoins(item.value)) {
+      addToInventory(item);
+      setMessage(`You purchased a ${item.name}!`);
+    } else {
+      setMessage("You don't have enough coins!");
+    }
+  };
+
+  const handleCloseStore = () => {
+    setShowStore(false);
+    // Spawn a new monster after closing the store
+    const newMonster = generateMonster(player.level);
+    setCurrentMonster(newMonster);
+    setMessage(`A new ${newMonster.name} appears! (Level ${newMonster.level})`);
+  };
+
+  const renderInventory = () => {
+    if (inventory.length === 0) {
+      return (
+        <div className="text-gray-400 text-center py-4">
+          Your inventory is empty. Defeat monsters to collect items!
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {inventory.map((item) => (
+          <div
+            key={item.id}
+            className="bg-gray-800/80 rounded-lg p-4 border border-gray-700 hover:border-red-500 transition-colors duration-200"
+          >
+            <div className="flex justify-between items-start mb-2">
+              <h3 className="text-lg font-semibold text-red-400">{item.name}</h3>
+              {item.quantity && item.quantity > 1 && (
+                <span className="text-gray-400">x{item.quantity}</span>
+              )}
+            </div>
+            <p className="text-gray-300 text-sm mb-2">{item.description}</p>
+            <div className="flex justify-between items-center">
+              <span className="text-yellow-500">{item.value} coins</span>
+              <button
+                onClick={() => handleUseItem(item.id)}
+                className="px-4 py-2 bg-red-800 hover:bg-red-700 text-white text-sm font-bold rounded-lg 
+                         transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
+              >
+                Use
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  if (!isNameSubmitted) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black p-8">
+        <div className="max-w-6xl mx-auto">
+          <div className="bg-gray-900/80 backdrop-blur-md rounded-xl shadow-2xl p-8 mb-6 text-gray-200 border border-gray-700">
+            <h1 className="text-5xl font-bold mb-8 text-center text-red-500 drop-shadow-lg font-gothic">
+              Math Legends
+            </h1>
+            <form onSubmit={handleNameSubmit} className="max-w-md mx-auto">
+              <div className="mb-6">
+                <label htmlFor="heroName" className="block text-xl font-semibold mb-2 text-red-400">
+                  Enter Your Hero's Name
+                </label>
+                <input
+                  type="text"
+                  id="heroName"
+                  value={heroName}
+                  onChange={(e) => setHeroName(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-700 p-3 rounded-lg text-white text-xl focus:outline-none focus:ring-2 focus:ring-red-500"
+                  placeholder="Your hero's name"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg 
+                         transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
+              >
+                Begin Adventure
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-900 to-purple-900 p-8">
+    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black p-8">
       <div className="max-w-6xl mx-auto">
-        <div className="bg-white/10 backdrop-blur-md rounded-xl shadow-2xl p-8 mb-6 text-white">
-          <h1 className="text-5xl font-bold mb-8 text-center text-yellow-400 drop-shadow-lg">
+        <div className="bg-gray-900/80 backdrop-blur-md rounded-xl shadow-2xl p-8 mb-6 text-gray-200 border border-gray-700">
+          <h1 className="text-5xl font-bold mb-8 text-center text-red-500 drop-shadow-lg font-gothic">
             Math Legends
           </h1>
           
           {/* Game Arena - Hero and Monster Side by Side */}
           <div className="mb-8 grid grid-cols-2 gap-8">
             {/* Hero Section */}
-            <div className="p-6 bg-blue-900/50 rounded-xl border border-blue-500/30">
+            <div className="p-6 bg-gray-800/80 rounded-xl border border-gray-700 shadow-inner">
               <div className="flex h-full">
                 <div className="flex-1">
-                  <h2 className="text-2xl font-semibold mb-4 text-blue-300">Hero Stats</h2>
+                  <h2 className="text-2xl font-semibold mb-4 text-red-400 font-gothic">
+                    {player.name || 'Hero'}
+                  </h2>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-blue-300">Level:</span>
-                      <span className="text-xl font-bold text-yellow-400">{player.level}</span>
+                      <span className="text-gray-300">Level:</span>
+                      <span className="text-xl font-bold text-red-400">{player.level}</span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-blue-300">Experience:</span>
+                      <span className="text-gray-300">Experience:</span>
                       <span className="text-xl font-bold text-purple-400">{player.experience}</span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-blue-300">Coins:</span>
+                      <span className="text-gray-300">Coins:</span>
                       <span className="text-xl font-bold">
-                        <span className="text-yellow-400">{player.coins.gold}g </span>
-                        <span className="text-gray-300">{player.coins.silver}s </span>
-                        <span className="text-orange-400">{player.coins.copper}c</span>
+                        <span className="text-yellow-500">{player.coins.gold}g </span>
+                        <span className="text-gray-400">{player.coins.silver}s </span>
+                        <span className="text-orange-500">{player.coins.copper}c</span>
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-blue-300">HP:</span>
+                      <span className="text-gray-300">HP:</span>
                       <div className="flex-1 ml-2">
-                        <div className="h-4 w-full bg-gray-700 rounded-full overflow-hidden">
+                        <div className="h-4 w-full bg-gray-900 rounded-full overflow-hidden border border-gray-700">
                           <div 
-                            className="h-full bg-green-500 transition-all duration-300"
+                            className="h-full bg-red-600 transition-all duration-300"
                             style={{ 
                               width: `${(player.currentHp / player.maxHp) * 100}%`,
-                              backgroundColor: player.currentHp < player.maxHp * 0.3 ? '#ef4444' : 
-                                            player.currentHp < player.maxHp * 0.6 ? '#f59e0b' : '#22c55e'
+                              backgroundColor: player.currentHp < player.maxHp * 0.3 ? '#7f1d1d' : 
+                                            player.currentHp < player.maxHp * 0.6 ? '#b91c1c' : '#dc2626'
                             }}
                           />
                         </div>
-                        <div className="text-sm text-center mt-1">
+                        <div className="text-sm text-center mt-1 text-gray-300">
                           {player.currentHp}/{player.maxHp}
                         </div>
                       </div>
                     </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Strength:</span>
+                      <span className="text-xl font-bold text-orange-400">{player.strength}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Defense:</span>
+                      <span className="text-xl font-bold text-blue-400">{player.defense}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Damage:</span>
+                      <span className="text-xl font-bold text-red-500">{player.damage}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Base Attack:</span>
+                      <span className="text-xl font-bold text-red-500">{calculateDamage()}</span>
+                    </div>
                   </div>
                 </div>
-                <div className={`w-40 h-full rounded-lg overflow-hidden shadow-lg border-2 border-blue-400/30 ml-6 transition-transform duration-500 relative ${
+                <div className={`w-40 h-full rounded-lg overflow-hidden shadow-lg border-2 border-gray-700 ml-6 transition-transform duration-500 relative ${
                   isHeroAttacking ? 'translate-x-8' : ''
                 }`}>
                   <img 
@@ -332,20 +518,20 @@ export const Game: React.FC = () => {
             {player.currentHp <= 0 ? (
               <div className="flex items-center justify-center">
                 <div className="text-center">
-                  <div className="text-3xl font-bold text-red-500 mb-6">Game Over!</div>
+                  <div className="text-3xl font-bold text-red-500 mb-6 font-gothic">Game Over!</div>
                   <button
                     onClick={handleSpawnMonster}
-                    className="px-8 py-4 bg-green-600 hover:bg-green-500 text-white text-xl font-bold rounded-lg 
-                             transition-colors duration-200 shadow-lg hover:shadow-green-500/50"
+                    className="px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg 
+                             transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
                   >
                     Start New Game
                   </button>
                 </div>
               </div>
             ) : currentMonster ? (
-              <div className="p-6 bg-red-900/50 rounded-xl border border-red-500/30">
+              <div className="p-6 bg-gray-800/80 rounded-xl border border-gray-700 shadow-inner">
                 <div className="flex h-full">
-                  <div className={`w-40 h-full rounded-lg overflow-hidden shadow-lg border-2 border-red-400/30 mr-6 transition-transform duration-500 ${
+                  <div className={`w-40 h-full rounded-lg overflow-hidden shadow-lg border-2 border-gray-700 mr-6 transition-transform duration-500 ${
                     isMonsterAttacking ? '-translate-x-8' : ''
                   }`}>
                     <img 
@@ -355,24 +541,24 @@ export const Game: React.FC = () => {
                     />
                   </div>
                   <div className="flex-1">
-                    <h2 className="text-2xl font-semibold mb-4 text-red-300">
+                    <h2 className="text-2xl font-semibold mb-4 text-red-400 font-gothic">
                       {currentMonster.name} <span className="text-lg">(Level {currentMonster.level})</span>
                     </h2>
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
-                        <span className="text-red-300">HP:</span>
+                        <span className="text-gray-300">HP:</span>
                         <div className="flex-1 ml-2">
-                          <div className="h-4 w-full bg-gray-700 rounded-full overflow-hidden">
+                          <div className="h-4 w-full bg-gray-900 rounded-full overflow-hidden border border-gray-700">
                             <div 
-                              className="h-full bg-red-500 transition-all duration-300"
+                              className="h-full bg-red-600 transition-all duration-300"
                               style={{ 
                                 width: `${(currentMonster.hp / currentMonster.maxHp) * 100}%`,
-                                backgroundColor: currentMonster.hp < currentMonster.maxHp * 0.3 ? '#ef4444' : 
-                                              currentMonster.hp < currentMonster.maxHp * 0.6 ? '#f59e0b' : '#22c55e'
+                                backgroundColor: currentMonster.hp < currentMonster.maxHp * 0.3 ? '#7f1d1d' : 
+                                              currentMonster.hp < currentMonster.maxHp * 0.6 ? '#b91c1c' : '#dc2626'
                               }}
                             />
                           </div>
-                          <div className="text-sm text-center mt-1 text-red-300">
+                          <div className="text-sm text-center mt-1 text-gray-300">
                             {currentMonster.hp}/{currentMonster.maxHp}
                           </div>
                         </div>
@@ -385,8 +571,8 @@ export const Game: React.FC = () => {
               <div className="flex items-center justify-center">
                 <button
                   onClick={handleSpawnMonster}
-                  className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white text-xl font-bold rounded-lg 
-                           transition-colors duration-200 shadow-lg hover:shadow-blue-500/50"
+                  className="px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg 
+                           transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
                 >
                   Find Monster
                 </button>
@@ -394,15 +580,21 @@ export const Game: React.FC = () => {
             )}
           </div>
 
+          {/* Inventory Section */}
+          <div className="p-6 bg-gray-800/80 rounded-xl border border-gray-700 shadow-inner mb-6">
+            <h2 className="text-2xl font-gothic text-purple-400 mb-4">Inventory</h2>
+            {renderInventory()}
+          </div>
+
           {/* Combat Interface */}
           {currentMonster && player.currentHp > 0 && (
-            <div className="p-6 bg-gray-900/50 rounded-xl border border-gray-500/30">
+            <div className="p-6 bg-gray-800/80 rounded-xl border border-gray-700 shadow-inner">
               <div className="text-lg text-center mb-4">
-                <span className={isDefending ? "text-blue-300" : "text-red-300"}>
+                <span className={isDefending ? "text-blue-400" : "text-red-400"}>
                   {isDefending ? "Defend against the monster's attack!" : "Attack the monster!"}
                 </span>
               </div>
-              <div className="text-3xl font-bold text-white text-center mb-4">
+              <div className="text-3xl font-bold text-gray-200 text-center mb-4 font-gothic">
                 {isDefending && defenseProblem 
                   ? defenseProblem.question 
                   : currentMonster.mathProblem.question}
@@ -413,15 +605,15 @@ export const Game: React.FC = () => {
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  className="flex-1 bg-white/10 border border-gray-500/30 p-3 rounded-lg text-white text-xl"
+                  className="flex-1 bg-gray-900 border border-gray-700 p-3 rounded-lg text-white text-xl focus:outline-none focus:ring-2 focus:ring-red-500"
                   placeholder="Enter your answer"
                 />
                 <button
                   onClick={handleSubmitAnswer}
-                  className={`px-8 py-3 text-white font-bold rounded-lg transition-colors duration-200 shadow-lg
+                  className={`px-8 py-3 text-white font-bold rounded-lg transition-colors duration-200 shadow-lg border
                             ${isDefending 
-                              ? 'bg-blue-600 hover:bg-blue-500 hover:shadow-blue-500/50' 
-                              : 'bg-red-600 hover:bg-red-500 hover:shadow-red-500/50'}`}
+                              ? 'bg-blue-900 hover:bg-blue-800 hover:shadow-blue-900/50 border-blue-800' 
+                              : 'bg-red-900 hover:bg-red-800 hover:shadow-red-900/50 border-red-800'}`}
                 >
                   {isDefending ? 'Defend!' : 'Attack!'}
                 </button>
@@ -433,16 +625,34 @@ export const Game: React.FC = () => {
           {message && (
             <div className={`mt-6 p-4 rounded-lg text-center text-lg font-semibold ${
               message.includes('Correct') || message.includes('successfully')
-                ? 'bg-green-900/50 border border-green-500/30 text-green-300'
+                ? 'bg-green-900/50 border border-green-800 text-green-300'
                 : message.includes('Game Over')
-                ? 'bg-red-900/50 border border-red-500/30 text-red-300'
-                : 'bg-yellow-900/50 border border-yellow-500/30 text-yellow-300'
+                ? 'bg-red-900/50 border border-red-800 text-red-300'
+                : 'bg-yellow-900/50 border border-yellow-800 text-yellow-300'
             }`}>
               {message}
             </div>
           )}
         </div>
       </div>
+
+      {/* Item Effect Message */}
+      {itemEffectMessage && (
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 
+                        bg-green-900/90 text-white px-6 py-3 rounded-lg text-xl font-bold 
+                        animate-fade-in-out z-50">
+          {itemEffectMessage}
+        </div>
+      )}
+
+      {/* Store Modal */}
+      {showStore && (
+        <Store
+          onClose={handleCloseStore}
+          onPurchase={handlePurchase}
+          coins={player.coins}
+        />
+      )}
     </div>
   );
 }; 

@@ -1,32 +1,30 @@
+import { Item } from './items';
+
 export interface Player {
+  name: string;
   level: number;
   experience: number;
-  maxHp: number;
   currentHp: number;
+  maxHp: number;
+  strength: number;
+  defense: number;
+  damage: number;
   coins: {
     gold: number;
     silver: number;
     copper: number;
   };
-  equipment: Equipment;
+  equipment?: {
+    weapon?: string;
+    armor?: string;
+    accessory?: string;
+  };
 }
 
 export interface Equipment {
   weapon?: Item;
   armor?: Item;
   accessory?: Item;
-}
-
-export interface Item {
-  id: string;
-  name: string;
-  type: 'weapon' | 'armor' | 'accessory';
-  bonus: {
-    attack?: number;
-    defense?: number;
-    hp?: number;
-  };
-  rarity: 'common' | 'rare' | 'epic' | 'legendary';
 }
 
 export interface Monster {
