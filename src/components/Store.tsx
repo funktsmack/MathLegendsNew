@@ -9,6 +9,7 @@ interface StoreProps {
     silver: number;
     copper: number;
   };
+  playerLevel: number;
 }
 
 const generateStoreItems = (playerLevel: number): Item[] => {
@@ -101,8 +102,8 @@ const generateStoreItems = (playerLevel: number): Item[] => {
   return items;
 };
 
-export const Store: React.FC<StoreProps> = ({ onClose, onPurchase, coins }) => {
-  const storeItems = generateStoreItems(5); // You can pass the actual player level here
+export const Store: React.FC<StoreProps> = ({ onClose, onPurchase, coins, playerLevel }) => {
+  const storeItems = generateStoreItems(playerLevel);
 
   const canAfford = (price: number) => {
     const totalCoins = coins.gold * 100 + coins.silver * 10 + coins.copper;

@@ -1,5 +1,4 @@
 import { Item, ItemType, ItemRarity, ITEM_IMAGES } from '../types/items';
-import { Monster } from '../types/game';
 
 // Helper function to generate a random ID
 const generateRandomId = () => Math.random().toString(36).substr(2, 9);
@@ -78,7 +77,7 @@ export const generateRandomItem = (monsterLevel: number): Item | null => {
     case ItemType.GEM:
       return generateGem(rarity, monsterLevel);
     case ItemType.FOOD:
-      return generateFood(rarity, monsterLevel);
+      return generateFood(rarity);
     case ItemType.MATERIAL:
       return generateMaterial(rarity, monsterLevel);
     default:
@@ -88,30 +87,8 @@ export const generateRandomItem = (monsterLevel: number): Item | null => {
 
 // Generate monster drops based on monster level
 export const generateMonsterDrops = (monsterLevel: number): Item[] => {
-  const drops: Item[] = [];
-  
-  // 30% chance to drop an item
-  if (Math.random() < 0.3) {
-    const itemTypes = ['potion', 'weapon', 'armor', 'scroll'];
-    const randomType = itemTypes[Math.floor(Math.random() * itemTypes.length)];
-    
-    switch (randomType) {
-      case 'potion':
-        drops.push(generatePotion(monsterLevel));
-        break;
-      case 'weapon':
-        drops.push(generateWeapon(monsterLevel));
-        break;
-      case 'armor':
-        drops.push(generateArmor(monsterLevel));
-        break;
-      case 'scroll':
-        drops.push(generateScroll(monsterLevel));
-        break;
-    }
-  }
-  
-  return drops;
+  const item = generateRandomItem(monsterLevel);
+  return item ? [item] : [];
 };
 
 // Helper functions to generate specific item types
@@ -257,7 +234,7 @@ const generateGem = (rarity: ItemRarity, monsterLevel: number): Item => {
   };
 };
 
-const generateFood = (rarity: ItemRarity, monsterLevel: number): Item => {
+const generateFood = (rarity: ItemRarity): Item => {
   const foodTypes = [
     { name: 'Apple', image: ITEM_IMAGES.apple, baseHeal: 10 },
     { name: 'Bread', image: ITEM_IMAGES.bread, baseHeal: 15 },
@@ -334,13 +311,3 @@ const getRarityMultiplier = (rarity: ItemRarity): number => {
     default: return 1;
   }
 };
-
-const calculateItemValue = (rarity: ItemRarity, monsterLevel: number): { gold: number; silver: number; copper: number } => {
-  const baseValue = monsterLevel * 10 * getRarityMultiplier(rarity);
-  
-  return {
-    gold: Math.floor(baseValue / 100),
-    silver: Math.floor((baseValue % 100) / 10),
-    copper: Math.floor(baseValue % 10)
-  };
-}; 
