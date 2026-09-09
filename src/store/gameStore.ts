@@ -15,7 +15,7 @@ interface GameActions {
   setCurrentMonster: (monster: Monster | null) => void;
   addToInventory: (item: Item) => void;
   removeFromInventory: (itemId: string) => void;
-  useItem: (itemId: string) => void;
+  consumeItem: (itemId: string) => void;
   gainExperience: (amount: number) => void;
   gainCoins: (gold: number, silver: number, copper: number) => void;
   takeDamage: (amount: number) => void;
@@ -89,7 +89,7 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
       inventory: state.inventory.filter(item => item.id !== itemId)
     })),
     
-  useItem: (itemId: string) => 
+  consumeItem: (itemId: string) => 
     set((state) => {
       const itemIndex = state.inventory.findIndex(item => item.id === itemId);
       if (itemIndex === -1) return state;

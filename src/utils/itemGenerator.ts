@@ -1,5 +1,4 @@
 import { Item, ItemType, ItemRarity, ITEM_IMAGES } from '../types/items';
-import { Monster } from '../types/game';
 
 // Helper function to generate a random ID
 const generateRandomId = () => Math.random().toString(36).substr(2, 9);
@@ -78,7 +77,7 @@ export const generateRandomItem = (monsterLevel: number): Item | null => {
     case ItemType.GEM:
       return generateGem(rarity, monsterLevel);
     case ItemType.FOOD:
-      return generateFood(rarity, monsterLevel);
+      return generateFood(rarity);
     case ItemType.MATERIAL:
       return generateMaterial(rarity, monsterLevel);
     default:
@@ -257,7 +256,7 @@ const generateGem = (rarity: ItemRarity, monsterLevel: number): Item => {
   };
 };
 
-const generateFood = (rarity: ItemRarity, monsterLevel: number): Item => {
+const generateFood = (rarity: ItemRarity): Item => {
   const foodTypes = [
     { name: 'Apple', image: ITEM_IMAGES.apple, baseHeal: 10 },
     { name: 'Bread', image: ITEM_IMAGES.bread, baseHeal: 15 },
@@ -334,13 +333,3 @@ const getRarityMultiplier = (rarity: ItemRarity): number => {
     default: return 1;
   }
 };
-
-const calculateItemValue = (rarity: ItemRarity, monsterLevel: number): { gold: number; silver: number; copper: number } => {
-  const baseValue = monsterLevel * 10 * getRarityMultiplier(rarity);
-  
-  return {
-    gold: Math.floor(baseValue / 100),
-    silver: Math.floor((baseValue % 100) / 10),
-    copper: Math.floor(baseValue % 10)
-  };
-}; 

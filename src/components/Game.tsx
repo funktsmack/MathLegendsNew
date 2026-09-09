@@ -107,11 +107,9 @@ export const Game: React.FC = () => {
     setPlayerName,
     setCurrentMonster,
     addToInventory,
-    removeFromInventory,
-    useItem,
+    consumeItem,
     takeDamage,
     resetPlayer,
-    collectMonsterDrops,
     gainExperience,
     gainCoins,
     spendCoins,
@@ -296,7 +294,7 @@ export const Game: React.FC = () => {
     const item = inventory.find(i => i.id === itemId);
     if (!item) return;
 
-    useItem(itemId);
+    consumeItem(itemId);
     
     // Show effect message based on item type
     let effectMessage = '';
