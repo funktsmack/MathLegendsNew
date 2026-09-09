@@ -3,18 +3,19 @@ import { useGameStore } from '../store/gameStore';
 import { Monster, MathProblem, Player } from '../types/game';
 import { Item, ItemType } from '../types/items';
 import { generateMonsterDrops } from '../utils/itemGenerator';
+import { assetUrl } from '../utils/assetUrl';
 import { Store } from './Store';
 
 // Local image paths for monsters
 const MONSTER_AVATARS = {
-  'Mathling': '/images/monsters/mathling.png',
-  'Number Goblin': '/images/monsters/goblin.png',
-  'Equation Elemental': '/images/monsters/elemental.png',
-  'Division Dragon': '/images/monsters/dragon.png',
-  'Algebra Apparition': '/images/monsters/apparition.png'
+  'Mathling': assetUrl('images/monsters/mathling.png'),
+  'Number Goblin': assetUrl('images/monsters/goblin.png'),
+  'Equation Elemental': assetUrl('images/monsters/elemental.png'),
+  'Division Dragon': assetUrl('images/monsters/dragon.png'),
+  'Algebra Apparition': assetUrl('images/monsters/apparition.png')
 };
 
-const HERO_AVATAR = '/images/hero/hero.png';
+const HERO_AVATAR = assetUrl('images/hero/hero.png');
 
 // Combo bonus: +5% damage per consecutive correct answer, capped at +50%
 const COMBO_DAMAGE_STEP = 0.05;
@@ -615,7 +616,7 @@ export const Game: React.FC = () => {
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="animate-shield w-24 h-24">
                         <img
-                          src="/images/shield/shield.png"
+                          src={assetUrl('images/shield/shield.png')}
                           alt="Shield"
                           className="w-full h-full object-contain drop-shadow-lg"
                         />
