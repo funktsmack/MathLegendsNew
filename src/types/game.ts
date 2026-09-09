@@ -14,11 +14,7 @@ export interface Player {
     silver: number;
     copper: number;
   };
-  equipment?: {
-    weapon?: string;
-    armor?: string;
-    accessory?: string;
-  };
+  equipment: Equipment;
 }
 
 export interface Equipment {

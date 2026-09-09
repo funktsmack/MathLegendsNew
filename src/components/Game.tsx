@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
-import { Monster, MathProblem } from '../types/game';
-import { Item } from '../types/items';
+import { Monster, MathProblem, Player } from '../types/game';
+import { Item, ItemType } from '../types/items';
 import { generateMonsterDrops } from '../utils/itemGenerator';
 import { Store } from './Store';
 
@@ -16,12 +16,24 @@ const MONSTER_AVATARS = {
 
 const HERO_AVATAR = '/images/hero/hero.png';
 
+// Combo bonus: +5% damage per consecutive correct answer, capped at +50%
+const COMBO_DAMAGE_STEP = 0.05;
+const COMBO_DAMAGE_CAP = 0.5;
+
+const getEffectiveDamage = (player: Player) =>
+  player.damage + (player.equipment.weapon?.effect.power || 0);
+
+const getEffectiveDefense = (player: Player) =>
+  player.defense + (player.equipment.armor?.effect.power || 0);
+
+const getDefenseTimeLimit = (level: number) => Math.max(15 - level, 6);
+
 const generateMathProblem = (level: number): MathProblem => {
   const types = ['addition', 'subtraction', 'multiplication', 'division'];
   const type = types[Math.min(Math.floor(level / 3), types.length - 1)] as MathProblem['type'];
-  
+
   let num1: number, num2: number, answer: number, question: string;
-  
+
   switch (type) {
     case 'addition':
       num1 = Math.floor(Math.random() * (10 * level)) + 1;
@@ -43,7 +55,7 @@ const generateMathProblem = (level: number): MathProblem => {
       break;
     case 'division':
       num2 = Math.floor(Math.random() * 10) + 1;
-      answer = Math.floor(Math.random() * 10) + 1;
+      answer = Math.floor(Math.random() * (5 * level)) + 1;
       num1 = num2 * answer;
       question = `${num1} ÷ ${num2} = ?`;
       break;
@@ -65,20 +77,20 @@ const generateMonster = (level: number): Monster => {
     'Division Dragon',
     'Algebra Apparition'
   ];
-  
+
   // Progressive monster selection based on level
   const availableMonsters = Math.min(
     2 + Math.floor((level - 1) / 3),
     monsters.length
   );
-  
+
   const monsterIndex = Math.floor(Math.random() * availableMonsters);
   const name = monsters[monsterIndex];
-  
+
   // Restore normal HP calculation
   const monsterLevel = Math.max(1, level + Math.floor(Math.random() * 3) - 1);
   const baseHp = 50 + (monsterLevel * 10);
-  
+
   return {
     id: Math.random().toString(36).substr(2, 9),
     name,
@@ -108,6 +120,9 @@ export const Game: React.FC = () => {
     setCurrentMonster,
     addToInventory,
     consumeItem,
+    equipItem,
+    unequipItem,
+    sellItem,
     takeDamage,
     resetPlayer,
     gainExperience,
@@ -118,35 +133,44 @@ export const Game: React.FC = () => {
   const [message, setMessage] = useState('');
   const [isDefending, setIsDefending] = useState(false);
   const [defenseProblem, setDefenseProblem] = useState<MathProblem | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [isHeroAttacking, setIsHeroAttacking] = useState(false);
   const [isMonsterAttacking, setIsMonsterAttacking] = useState(false);
   const [showShield, setShowShield] = useState(false);
   const [heroName, setHeroName] = useState('');
-  const [isNameSubmitted, setIsNameSubmitted] = useState(false);
+  const [isNameSubmitted, setIsNameSubmitted] = useState(() => player.name.trim().length > 0);
   const [itemEffectMessage, setItemEffectMessage] = useState<string | null>(null);
   const [monstersDefeated, setMonstersDefeated] = useState(0);
   const [showStore, setShowStore] = useState(false);
+  const [combo, setCombo] = useState(0);
 
-  // Calculate damage based on player level and monster level
-  const calculateDamage = () => {
-    const baseDamage = 10 + (player.level * 2) + player.strength + player.damage;
+  // Calculate damage based on player level, monster level, and combo streak
+  const calculateDamage = (comboCount: number = combo) => {
+    const baseDamage = 10 + (player.level * 2) + player.strength + getEffectiveDamage(player);
     const monsterLevel = currentMonster?.level || player.level;
     const levelDifference = monsterLevel - player.level;
-    
+
     // Adjust damage based on level difference
     const damageMultiplier = levelDifference > 0 ? 1.2 : levelDifference < 0 ? 0.8 : 1;
-    
-    return Math.floor(baseDamage * damageMultiplier);
+    const comboMultiplier = 1 + Math.min(comboCount * COMBO_DAMAGE_STEP, COMBO_DAMAGE_CAP);
+
+    return Math.floor(baseDamage * damageMultiplier * comboMultiplier);
   };
+
+  const calculateMonsterDamage = useCallback((monster: Monster) => {
+    const baseMonsterDamage = Math.floor(15 + (monster.level * 2));
+    const damageReduction = Math.floor(getEffectiveDefense(player) * 0.5); // Each point of defense reduces damage by 0.5
+    return Math.max(1, baseMonsterDamage - damageReduction); // Minimum 1 damage
+  }, [player]);
 
   // Handle monster defeat and progression
   const handleMonsterDefeat = () => {
     if (!currentMonster) return;
-    
+
     const { experience, coins } = currentMonster.rewards;
     gainExperience(experience);
     gainCoins(coins.gold, coins.silver, coins.copper);
-    
+
     // Collect items and show feedback
     const drops = generateMonsterDrops(currentMonster.level);
     if (drops.length > 0) {
@@ -155,27 +179,27 @@ export const Game: React.FC = () => {
         setMessage(prev => prev + `\nYou found a ${item.name}!`);
       });
     }
-    
+
     // Increment monsters defeated counter
     const newMonstersDefeated = monstersDefeated + 1;
     setMonstersDefeated(newMonstersDefeated);
-    
+
     // Show store every 5 monsters
     if (newMonstersDefeated % 5 === 0) {
       setShowStore(true);
       setCurrentMonster(null);
       return;
     }
-    
+
     // Random chance to spawn a new monster of higher level
     const shouldLevelUp = Math.random() < 0.3;
     const newMonsterLevel = shouldLevelUp ? currentMonster.level + 1 : currentMonster.level;
     const newMonster = generateMonster(newMonsterLevel);
-    
+
     setCurrentMonster(newMonster);
     setMessage(
       `You defeated the ${currentMonster.name}! ` +
-      (shouldLevelUp 
+      (shouldLevelUp
         ? `A stronger ${newMonster.name} appears! (Level ${newMonster.level})`
         : `A new ${newMonster.name} appears! (Level ${newMonster.level})`)
     );
@@ -189,6 +213,7 @@ export const Game: React.FC = () => {
     if (player.currentHp <= 0) {
       setMessage('Game Over! Your hero has fallen...');
       setCurrentMonster(null);
+      setCombo(0);
     }
   }, [player.currentHp, setCurrentMonster]);
 
@@ -210,16 +235,55 @@ export const Game: React.FC = () => {
       setDefenseProblem(generateMathProblem(currentMonster.level));
       setIsMonsterAttacking(true);
       setTimeout(() => setIsMonsterAttacking(false), 1000);
-      
-      // Calculate monster damage based on level difference and player defense
-      const baseMonsterDamage = Math.floor(15 + (currentMonster.level * 2));
-      const damageReduction = Math.floor(player.defense * 0.5); // Each point of defense reduces damage by 0.5
-      const monsterDamage = Math.max(1, baseMonsterDamage - damageReduction); // Minimum 1 damage
-      
+      setTimeLeft(getDefenseTimeLimit(currentMonster.level));
+
+      const monsterDamage = calculateMonsterDamage(currentMonster);
       setMessage(`The monster is attacking! Solve the problem to defend yourself! (${monsterDamage} damage)`);
       setAnswer('');
     }
   };
+
+  const succeedDefense = () => {
+    if (!currentMonster) return;
+    setCombo((c) => c + 1);
+    setMessage(`You successfully defended against ${currentMonster.name}'s attack!`);
+    setShowShield(true);
+    setTimeout(() => setShowShield(false), 1000);
+    setDefenseProblem(null);
+    setIsDefending(false);
+    setIsMonsterAttacking(false);
+    setTimeLeft(null);
+  };
+
+  const failDefense = useCallback(() => {
+    if (!currentMonster) return;
+    const monsterDamage = calculateMonsterDamage(currentMonster);
+    setCombo(0);
+    takeDamage(monsterDamage);
+    setMessage(`You failed to defend! ${currentMonster.name} dealt ${monsterDamage} damage!`);
+    setDefenseProblem(null);
+    setIsDefending(false);
+    setIsMonsterAttacking(false);
+    setTimeLeft(null);
+  }, [currentMonster, calculateMonsterDamage, takeDamage]);
+
+  // Tick the defense countdown while defending
+  useEffect(() => {
+    if (!isDefending) return;
+
+    const interval = setInterval(() => {
+      setTimeLeft((prev) => (prev !== null && prev > 0 ? prev - 1 : prev));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isDefending, defenseProblem]);
+
+  // Auto-fail the defense if the timer runs out
+  useEffect(() => {
+    if (isDefending && timeLeft === 0) {
+      failDefense();
+    }
+  }, [isDefending, timeLeft, failDefense]);
 
   const handleSubmitAnswer = () => {
     if (!currentMonster) return;
@@ -229,23 +293,20 @@ export const Game: React.FC = () => {
     if (!currentProblem) return;
 
     const isCorrect = parseInt(answer) === currentProblem.answer;
-    
+
     if (isCorrect) {
       if (isDefending) {
-        setMessage(`You successfully defended against ${currentMonster.name}'s attack!`);
-        setShowShield(true);
-        setTimeout(() => setShowShield(false), 1000);
-        setDefenseProblem(null);
-        setIsDefending(false);
-        setIsMonsterAttacking(false);
+        succeedDefense();
       } else {
+        const newCombo = combo + 1;
+        setCombo(newCombo);
         setIsHeroAttacking(true);
         setTimeout(() => setIsHeroAttacking(false), 1000);
-        const damage = calculateDamage();
+        const damage = calculateDamage(newCombo);
         const updatedMonster = { ...currentMonster, hp: currentMonster.hp - damage };
         setCurrentMonster(updatedMonster);
         setMessage(`You dealt ${damage} damage to ${currentMonster.name}!`);
-        
+
         if (updatedMonster.hp <= 0) {
           handleMonsterDefeat();
         } else {
@@ -255,24 +316,16 @@ export const Game: React.FC = () => {
       }
     } else {
       if (isDefending) {
-        // Calculate monster damage based on level difference and player defense
-        const baseMonsterDamage = Math.floor(15 + (currentMonster.level * 2));
-        const damageReduction = Math.floor(player.defense * 0.5); // Each point of defense reduces damage by 0.5
-        const monsterDamage = Math.max(1, baseMonsterDamage - damageReduction); // Minimum 1 damage
-    
-        takeDamage(monsterDamage);
-        setMessage(`You failed to defend! ${currentMonster.name} dealt ${monsterDamage} damage!`);
-        setDefenseProblem(null);
-        setIsDefending(false);
-        setIsMonsterAttacking(false);
+        failDefense();
       } else {
+        setCombo(0);
         takeDamage(10);
         setMessage(`Wrong answer! You take 10 damage!`);
         // Start monster's turn after failed attack
         startMonsterTurn();
       }
     }
-    
+
     setAnswer('');
   };
 
@@ -295,7 +348,7 @@ export const Game: React.FC = () => {
     if (!item) return;
 
     consumeItem(itemId);
-    
+
     // Show effect message based on item type
     let effectMessage = '';
     switch (item.effect.type) {
@@ -320,10 +373,22 @@ export const Game: React.FC = () => {
       case 'bless':
         effectMessage = 'Blessed with good fortune!';
         break;
+      case 'experience':
+        effectMessage = `Gained ${item.effect.value ?? item.effect.power} experience!`;
+        break;
     }
-    
+
     setItemEffectMessage(effectMessage);
     setTimeout(() => setItemEffectMessage(null), 2000); // Clear message after 2 seconds
+  };
+
+  const handleEquipItem = (itemId: string) => {
+    const item = inventory.find(i => i.id === itemId);
+    if (!item) return;
+
+    equipItem(itemId);
+    setItemEffectMessage(`Equipped ${item.name}!`);
+    setTimeout(() => setItemEffectMessage(null), 2000);
   };
 
   const handlePurchase = (item: Item) => {
@@ -354,30 +419,43 @@ export const Game: React.FC = () => {
 
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {inventory.map((item) => (
-          <div
-            key={item.id}
-            className="bg-gray-800/80 rounded-lg p-4 border border-gray-700 hover:border-red-500 transition-colors duration-200"
-          >
-            <div className="flex justify-between items-start mb-2">
-              <h3 className="text-lg font-semibold text-red-400">{item.name}</h3>
-              {item.quantity && item.quantity > 1 && (
-                <span className="text-gray-400">x{item.quantity}</span>
-              )}
+        {inventory.map((item) => {
+          const isEquippable = item.type === ItemType.WEAPON || item.type === ItemType.ARMOR;
+
+          return (
+            <div
+              key={item.id}
+              className="bg-gray-800/80 rounded-lg p-4 border border-gray-700 hover:border-red-500 transition-colors duration-200"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <h3 className="text-lg font-semibold text-red-400">{item.name}</h3>
+                {item.quantity && item.quantity > 1 && (
+                  <span className="text-gray-400">x{item.quantity}</span>
+                )}
+              </div>
+              <p className="text-gray-300 text-sm mb-2">{item.description}</p>
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-yellow-500">{item.value} coins</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => (isEquippable ? handleEquipItem(item.id) : handleUseItem(item.id))}
+                    className="px-4 py-2 bg-red-800 hover:bg-red-700 text-white text-sm font-bold rounded-lg
+                             transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
+                  >
+                    {isEquippable ? 'Equip' : 'Use'}
+                  </button>
+                  <button
+                    onClick={() => sellItem(item.id)}
+                    className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold rounded-lg
+                             transition-colors duration-200 border border-gray-600"
+                  >
+                    Sell
+                  </button>
+                </div>
+              </div>
             </div>
-            <p className="text-gray-300 text-sm mb-2">{item.description}</p>
-            <div className="flex justify-between items-center">
-              <span className="text-yellow-500">{item.value} coins</span>
-              <button
-                onClick={() => handleUseItem(item.id)}
-                className="px-4 py-2 bg-red-800 hover:bg-red-700 text-white text-sm font-bold rounded-lg 
-                         transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
-              >
-                Use
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -407,7 +485,7 @@ export const Game: React.FC = () => {
               </div>
               <button
                 type="submit"
-                className="w-full px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg 
+                className="w-full px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg
                          transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
               >
                 Begin Adventure
@@ -426,7 +504,7 @@ export const Game: React.FC = () => {
           <h1 className="text-5xl font-bold mb-8 text-center text-red-500 drop-shadow-lg font-gothic">
             Math Legends
           </h1>
-          
+
           {/* Game Arena - Hero and Monster Side by Side */}
           <div className="mb-8 grid grid-cols-2 gap-8">
             {/* Hero Section */}
@@ -457,11 +535,11 @@ export const Game: React.FC = () => {
                       <span className="text-gray-300">HP:</span>
                       <div className="flex-1 ml-2">
                         <div className="h-4 w-full bg-gray-900 rounded-full overflow-hidden border border-gray-700">
-                          <div 
+                          <div
                             className="h-full bg-red-600 transition-all duration-300"
-                            style={{ 
+                            style={{
                               width: `${(player.currentHp / player.maxHp) * 100}%`,
-                              backgroundColor: player.currentHp < player.maxHp * 0.3 ? '#7f1d1d' : 
+                              backgroundColor: player.currentHp < player.maxHp * 0.3 ? '#7f1d1d' :
                                             player.currentHp < player.maxHp * 0.6 ? '#b91c1c' : '#dc2626'
                             }}
                           />
@@ -477,32 +555,68 @@ export const Game: React.FC = () => {
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-gray-300">Defense:</span>
-                      <span className="text-xl font-bold text-blue-400">{player.defense}</span>
+                      <span className="text-xl font-bold text-blue-400">{getEffectiveDefense(player)}</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-gray-300">Damage:</span>
-                      <span className="text-xl font-bold text-red-500">{player.damage}</span>
+                      <span className="text-xl font-bold text-red-500">{getEffectiveDamage(player)}</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-gray-300">Base Attack:</span>
                       <span className="text-xl font-bold text-red-500">{calculateDamage()}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Weapon:</span>
+                      <span className="text-right">
+                        {player.equipment.weapon ? (
+                          <>
+                            <span className="text-red-400 font-semibold">{player.equipment.weapon.name}</span>
+                            <button
+                              onClick={() => unequipItem('weapon')}
+                              className="ml-2 text-xs text-gray-400 hover:text-white underline"
+                            >
+                              Unequip
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-gray-500">None</span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Armor:</span>
+                      <span className="text-right">
+                        {player.equipment.armor ? (
+                          <>
+                            <span className="text-blue-400 font-semibold">{player.equipment.armor.name}</span>
+                            <button
+                              onClick={() => unequipItem('armor')}
+                              className="ml-2 text-xs text-gray-400 hover:text-white underline"
+                            >
+                              Unequip
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-gray-500">None</span>
+                        )}
+                      </span>
                     </div>
                   </div>
                 </div>
                 <div className={`w-40 h-full rounded-lg overflow-hidden shadow-lg border-2 border-gray-700 ml-6 transition-transform duration-500 relative ${
                   isHeroAttacking ? 'translate-x-8' : ''
                 }`}>
-                  <img 
-                    src={HERO_AVATAR} 
-                    alt="Hero" 
+                  <img
+                    src={HERO_AVATAR}
+                    alt="Hero"
                     className="w-full h-full object-cover"
                   />
                   {showShield && (
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="animate-shield w-24 h-24">
-                        <img 
-                          src="/images/shield/shield.png" 
-                          alt="Shield" 
+                        <img
+                          src="/images/shield/shield.png"
+                          alt="Shield"
                           className="w-full h-full object-contain drop-shadow-lg"
                         />
                       </div>
@@ -519,7 +633,7 @@ export const Game: React.FC = () => {
                   <div className="text-3xl font-bold text-red-500 mb-6 font-gothic">Game Over!</div>
                   <button
                     onClick={handleSpawnMonster}
-                    className="px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg 
+                    className="px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg
                              transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
                   >
                     Start New Game
@@ -532,9 +646,9 @@ export const Game: React.FC = () => {
                   <div className={`w-40 h-full rounded-lg overflow-hidden shadow-lg border-2 border-gray-700 mr-6 transition-transform duration-500 ${
                     isMonsterAttacking ? '-translate-x-8' : ''
                   }`}>
-                    <img 
-                      src={currentMonster.image} 
-                      alt={currentMonster.name} 
+                    <img
+                      src={currentMonster.image}
+                      alt={currentMonster.name}
                       className="w-full h-full object-cover"
                     />
                   </div>
@@ -547,11 +661,11 @@ export const Game: React.FC = () => {
                         <span className="text-gray-300">HP:</span>
                         <div className="flex-1 ml-2">
                           <div className="h-4 w-full bg-gray-900 rounded-full overflow-hidden border border-gray-700">
-                            <div 
+                            <div
                               className="h-full bg-red-600 transition-all duration-300"
-                              style={{ 
+                              style={{
                                 width: `${(currentMonster.hp / currentMonster.maxHp) * 100}%`,
-                                backgroundColor: currentMonster.hp < currentMonster.maxHp * 0.3 ? '#7f1d1d' : 
+                                backgroundColor: currentMonster.hp < currentMonster.maxHp * 0.3 ? '#7f1d1d' :
                                               currentMonster.hp < currentMonster.maxHp * 0.6 ? '#b91c1c' : '#dc2626'
                               }}
                             />
@@ -569,7 +683,7 @@ export const Game: React.FC = () => {
               <div className="flex items-center justify-center">
                 <button
                   onClick={handleSpawnMonster}
-                  className="px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg 
+                  className="px-8 py-4 bg-red-800 hover:bg-red-700 text-white text-xl font-bold rounded-lg
                            transition-colors duration-200 shadow-lg hover:shadow-red-900/50 border border-red-900"
                 >
                   Find Monster
@@ -592,9 +706,25 @@ export const Game: React.FC = () => {
                   {isDefending ? "Defend against the monster's attack!" : "Attack the monster!"}
                 </span>
               </div>
+              {combo > 1 && (
+                <div className="text-center text-orange-400 font-bold mb-4">
+                  🔥 {combo}x Combo! (+{Math.min(combo * COMBO_DAMAGE_STEP * 100, COMBO_DAMAGE_CAP * 100)}% damage)
+                </div>
+              )}
+              {isDefending && timeLeft !== null && (
+                <div className="mb-4">
+                  <div className="h-2 w-full bg-gray-900 rounded-full overflow-hidden border border-gray-700">
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-1000 ease-linear"
+                      style={{ width: `${(timeLeft / getDefenseTimeLimit(currentMonster.level)) * 100}%` }}
+                    />
+                  </div>
+                  <div className="text-sm text-center mt-1 text-blue-300">{timeLeft}s to answer!</div>
+                </div>
+              )}
               <div className="text-3xl font-bold text-gray-200 text-center mb-4 font-gothic">
-                {isDefending && defenseProblem 
-                  ? defenseProblem.question 
+                {isDefending && defenseProblem
+                  ? defenseProblem.question
                   : currentMonster.mathProblem.question}
               </div>
               <div className="flex gap-4">
@@ -609,8 +739,8 @@ export const Game: React.FC = () => {
                 <button
                   onClick={handleSubmitAnswer}
                   className={`px-8 py-3 text-white font-bold rounded-lg transition-colors duration-200 shadow-lg border
-                            ${isDefending 
-                              ? 'bg-blue-900 hover:bg-blue-800 hover:shadow-blue-900/50 border-blue-800' 
+                            ${isDefending
+                              ? 'bg-blue-900 hover:bg-blue-800 hover:shadow-blue-900/50 border-blue-800'
                               : 'bg-red-900 hover:bg-red-800 hover:shadow-red-900/50 border-red-800'}`}
                 >
                   {isDefending ? 'Defend!' : 'Attack!'}
@@ -636,8 +766,8 @@ export const Game: React.FC = () => {
 
       {/* Item Effect Message */}
       {itemEffectMessage && (
-        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 
-                        bg-green-900/90 text-white px-6 py-3 rounded-lg text-xl font-bold 
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2
+                        bg-green-900/90 text-white px-6 py-3 rounded-lg text-xl font-bold
                         animate-fade-in-out z-50">
           {itemEffectMessage}
         </div>
@@ -649,8 +779,9 @@ export const Game: React.FC = () => {
           onClose={handleCloseStore}
           onPurchase={handlePurchase}
           coins={player.coins}
+          playerLevel={player.level}
         />
       )}
     </div>
   );
-}; 
+};

@@ -87,30 +87,8 @@ export const generateRandomItem = (monsterLevel: number): Item | null => {
 
 // Generate monster drops based on monster level
 export const generateMonsterDrops = (monsterLevel: number): Item[] => {
-  const drops: Item[] = [];
-  
-  // 30% chance to drop an item
-  if (Math.random() < 0.3) {
-    const itemTypes = ['potion', 'weapon', 'armor', 'scroll'];
-    const randomType = itemTypes[Math.floor(Math.random() * itemTypes.length)];
-    
-    switch (randomType) {
-      case 'potion':
-        drops.push(generatePotion(monsterLevel));
-        break;
-      case 'weapon':
-        drops.push(generateWeapon(monsterLevel));
-        break;
-      case 'armor':
-        drops.push(generateArmor(monsterLevel));
-        break;
-      case 'scroll':
-        drops.push(generateScroll(monsterLevel));
-        break;
-    }
-  }
-  
-  return drops;
+  const item = generateRandomItem(monsterLevel);
+  return item ? [item] : [];
 };
 
 // Helper functions to generate specific item types
